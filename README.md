@@ -36,10 +36,21 @@ In contrast to MultiSig solutions, transactions produced by TSS preserve the pri
 
 There is also a performance bonus in that blockchain nodes may check the validity of a signature without any extra MultiSig logic or processing.
 
+## References
+
+- IBM is developing a wrapper library to facilitate the use of tss-lib: <https://github.com/IBM/TSS/tree/main/mpc/binance/ecdsa>.
+- flock-org is developing a framework that use tss-lib: <https://github.com/flock-org/flock>.
+- a demonstration CLI tool in a single local device: <https://github.com/Thykof/tss-lib-cli>
+
 ## Usage
 You should start by creating an instance of a `LocalParty` and giving it the arguments that it needs.
 
 The `LocalParty` that you use should be from the `keygen`, `signing` or `resharing` package depending on what you want to do.
+
+### Install
+
+    go get github.com/bnb-chain/tss-lib/v2
+    go mod edit -replace github.com/agl/ed25519=github.com/binance-chain/edwards25519@v0.0.0-20200305024217-f36fc4b53d43
 
 ### Setup
 ```go
@@ -48,13 +59,17 @@ The `LocalParty` that you use should be from the `keygen`, `signing` or `reshari
 preParams, _ := keygen.GeneratePreParams(1 * time.Minute)
 
 // Create a `*PartyID` for each participating peer on the network (you should call `tss.NewPartyID` for each one)
-parties := tss.SortPartyIDs(getParticipantPartyIDs())
+// cf. https://github.com/flock-org/flock/blob/6b723c035599c0013f1a65d8ce1d18d53f775b1c/applications/internal/signing/signing-util.go#L81
+parties := GetParticipantPartyIDs(numParties)
 
 // Set up the parameters
 // Note: The `id` and `moniker` fields are for convenience to allow you to easily track participants.
 // The `id` should be a unique string representing this party in the network and `moniker` can be anything (even left blank).
 // The `uniqueKey` is a unique identifying key for this peer (such as its p2p public key) as a big.Int.
 thisParty := tss.NewPartyID(id, moniker, uniqueKey)
+// or use the a generated party
+// thisParty := parties[0]
+
 ctx := tss.NewPeerContext(parties)
 
 // Select an elliptic curve
@@ -71,6 +86,8 @@ for _, id := range parties {
     partyIDMap[id.Id] = id
 }
 ```
+
+The sections below provide detailed instructions on how to use each of the three protocols.
 
 ### Keygen
 Use the `keygen.LocalParty` for the keygen protocol. The save data you receive through the `endCh` upon completion of the protocol should be persisted to secure storage.
@@ -116,6 +133,11 @@ In these examples the `outCh` will collect outgoing messages from the party and 
 
 During the protocol you should provide the party with updates received from other participating parties on the network.
 
+In a typical use case, it is expected that a transport implementation will consume message bytes via the `out` channel of the local `Party`, send them to the destination(s) specified in the result of `msg.GetTo()`, and pass them to `UpdateFromBytes` on the receiving end.
+This way there is no need to deal with Marshal/Unmarshalling Protocol Buffers to implement a transport.
+
+### Update the party with received message
+
 A `Party` has two thread-safe methods on it for receiving updates.
 ```go
 // The main entry point when updating a party's state from the wire
@@ -124,7 +146,20 @@ UpdateFromBytes(wireBytes []byte, from *tss.PartyID, isBroadcast bool) (ok bool,
 Update(msg tss.ParsedMessage) (ok bool, err *tss.Error)
 ```
 
-And a `tss.Message` has the following two methods for converting messages to data for the wire:
+Here is how the party can be updated based on the received message:
+
+```go
+// message received
+msg, err := tss.ParseWireMessage(bytes, &from, isBroadcast)
+party.Update(msg)
+```
+
+The communication layer should handle the `from` and `isBroadcast` information along with the message.
+The `from` part must include id, moniker, uniqueKey to be able to create the partyID with `tss.NewPartyID`.
+
+### Forward the message to other parties
+
+A `tss.Message` has the following two methods for converting messages to data for the wire:
 ```go
 // Returns the encoded message bytes to send over the wire along with routing information
 WireBytes() ([]byte, *tss.MessageRouting, error)
@@ -132,9 +167,24 @@ WireBytes() ([]byte, *tss.MessageRouting, error)
 WireMsg() *tss.MessageWrapper
 ```
 
-In a typical use case, it is expected that a transport implementation will consume message bytes via the `out` channel of the local `Party`, send them to the destination(s) specified in the result of `msg.GetTo()`, and pass them to `UpdateFromBytes` on the receiving end.
+Here is how the party can send the output message of the protocol:
 
-This way there is no need to deal with Marshal/Unmarshalling Protocol Buffers to implement a transport.
+```go
+for {
+    select {
+    case msg := <-endCh:
+        // serialize and save or return
+    case msg := <-outCh:
+        to := msg.GetTo()
+        msgBytes, msgRouting, err := msg.WireBytes()
+        if to == nil {
+            // Broadcast message
+        } else {
+            // Direct message
+        }
+    }
+}
+```
 
 ## Changes of Preparams of ECDSA in v2.0
 
