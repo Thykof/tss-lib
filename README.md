@@ -154,7 +154,7 @@ msg, err := tss.ParseWireMessage(bytes, &from, isBroadcast)
 party.Update(msg)
 ```
 
-The communication layer should handle the `from` and `isBroadcast` information along with the message.
+In the communication layer, the payload should contains the `from` and `isBroadcast` information along with the message.
 The `from` part must include id, moniker, uniqueKey to be able to create the partyID with `tss.NewPartyID`.
 
 ### Forward the message to other parties
